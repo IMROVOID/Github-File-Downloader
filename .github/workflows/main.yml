@@ -1,5 +1,5 @@
 ---
-name: ⬇️  01 - Download URL
+name: ⬇️  01- Download URL
 
 on:
   workflow_dispatch:
@@ -141,9 +141,6 @@ jobs:
           MAX_ARCHIVE_TIME_SEC=19800   # 5.5 hours
 
           mkdir -p downloads tmp_downloads
-
-          # Capture job start time (for README)
-          JOB_START_TIME=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
           # ---------- Keep‑alive runner ----------
           keepalive_exec() {
@@ -384,111 +381,49 @@ jobs:
             keepalive_exec "7z archive" "${CMD_ARGS[@]}"
           }
 
-          # ---------- Name shortener for single‑file archive ----------
-          shorten_name() {
-            local NAME="$1"
-            local MAXLEN=50
-            if [ ${#NAME} -le $MAXLEN ]; then
-              echo "$NAME"
-              return
-            fi
-            local EXT="${NAME##*.}"
-            local BASE="${NAME%.*}"
-            if [ "$EXT" = "$NAME" ]; then
-              # no extension
-              echo "${NAME:0:$((MAXLEN-1))}~"
-            else
-              local TRUNC_BASE_LEN=$((MAXLEN - ${#EXT} - 2))  # for the dot and tilde
-              if [ $TRUNC_BASE_LEN -lt 1 ]; then TRUNC_BASE_LEN=1; fi
-              echo "${BASE:0:$TRUNC_BASE_LEN}~.${EXT}"
-            fi
-          }
-
-          # ---------- Folder uniqueness (simple counter) ----------
-          unique_timestamp_folder() {
-            local BASE_DIR="$1"
-            local PREFIX="$2"
-            local TIMESTAMP="$3"
-            local CANDIDATE="${PREFIX}_${TIMESTAMP}"
-            if [ ! -d "$BASE_DIR/$CANDIDATE" ]; then
-              echo "$CANDIDATE"
-              return
-            fi
-            local I=2
-            while [ -d "$BASE_DIR/${CANDIDATE}_${I}" ]; do
-              I=$((I+1))
-            done
-            echo "${CANDIDATE}_${I}"
-          }
-
           # ---------- Process according to mode ----------
-          TIMESTAMP_NOW=$(date +%Y%m%d_%H%M%S)
-
           if [ "$MODE" = "zip" ]; then
             # Combined archive of all downloaded files
             if [ -n "$(ls -A tmp_downloads 2>/dev/null)" ]; then
-              # folder always uses archive_ prefix
-              ARCHIVE_FOLDER=$(unique_timestamp_folder "$BACKUP_DIR" "archive" "$TIMESTAMP_NOW")
-              mkdir -p "$BACKUP_DIR/$ARCHIVE_FOLDER"
-              echo "Archive folder: $BACKUP_DIR/$ARCHIVE_FOLDER"
+              ARCHIVE_NAME="archive_$(date +%Y%m%d_%H%M%S)"
+              FOLDER_NAME=$(get_unique_folder "$BACKUP_DIR" "$ARCHIVE_NAME")
+              mkdir -p "$BACKUP_DIR/$FOLDER_NAME"
+              echo "Creating 7z multi‑volume archive in folder: $BACKUP_DIR/$FOLDER_NAME"
 
               TEMP_ARCHIVE_DIR="/tmp/7z_temp_$$"
               mkdir -p "$TEMP_ARCHIVE_DIR"
               VALID_FILES=0
               TOTAL_SIZE=0
-              SINGLE_FILENAME=""
               for f in tmp_downloads/*; do
                 if [ -f "$f" ] && [ -s "$f" ]; then
                   cp "$f" "$TEMP_ARCHIVE_DIR/"
                   VALID_FILES=$((VALID_FILES + 1))
                   FSIZE=$(stat -c%s "$f" 2>/dev/null || echo 0)
                   TOTAL_SIZE=$((TOTAL_SIZE + FSIZE))
-                  if [ $VALID_FILES -eq 1 ]; then
-                    SINGLE_FILENAME=$(basename "$f")
-                  fi
                 else
                   echo "Skipping empty or invalid file: $f"
                 fi
               done
 
               if [ $VALID_FILES -gt 0 ]; then
-                # Determine archive base name inside the folder
-                if [ $VALID_FILES -eq 1 ]; then
-                  ARCHIVE_FILE_BASE=$(shorten_name "$SINGLE_FILENAME")
-                else
-                  ARCHIVE_FILE_BASE="$ARCHIVE_FOLDER"
-                fi
-
                 MX_LEVEL=$(determine_compression_level "$TOTAL_SIZE" "$COMPRESSION_PRESET" "$CPU_CORES")
                 echo "Using compression level -mx=${MX_LEVEL} for combined archive (${TOTAL_SIZE} bytes total)"
-                ARCHIVE_OUTPUT_BASE="$BACKUP_DIR/$ARCHIVE_FOLDER/$ARCHIVE_FILE_BASE"
-                create_high_ratio_archive "$TEMP_ARCHIVE_DIR" "$ARCHIVE_OUTPUT_BASE" "$PART_SIZE_MB" "yes" "$ZIP_PASSWORD" "$MX_LEVEL"
+                ARCHIVE_BASE="$BACKUP_DIR/$FOLDER_NAME/$ARCHIVE_NAME"
+                create_high_ratio_archive "$TEMP_ARCHIVE_DIR" "$ARCHIVE_BASE" "$PART_SIZE_MB" "yes" "$ZIP_PASSWORD" "$MX_LEVEL"
                 rm -rf "$TEMP_ARCHIVE_DIR"
 
-                PARTS_COUNT=$(ls "$BACKUP_DIR/$ARCHIVE_FOLDER/"*.7z.* 2>/dev/null | wc -l)
+                PARTS_COUNT=$(ls "$BACKUP_DIR/$FOLDER_NAME/"*.7z.* 2>/dev/null | wc -l)
                 if [ "$PARTS_COUNT" -eq 0 ]; then
-                  # single archive (no split) check for the .7z
-                  if [ -f "${ARCHIVE_OUTPUT_BASE}.7z" ]; then
-                    PARTS_COUNT=1
-                  else
-                    echo "ERROR: No archive parts were created!"
-                    rm -f "${ARCHIVE_OUTPUT_BASE}.7z" "${ARCHIVE_OUTPUT_BASE}.7z."*
-                    PARTS_COUNT=0
-                  fi
-                fi
-
-                if [ $PARTS_COUNT -gt 0 ]; then
-                  # Collect archive file details and generate links
-                  FOLDER_ENCODED=$(urlencode "${ARCHIVE_FOLDER}")
+                  echo "ERROR: No archive parts were created!"
+                  rm -f "$BACKUP_DIR/$FOLDER_NAME/$ARCHIVE_NAME".7z.*
+                else
+                  FOLDER_ENCODED=$(urlencode "${FOLDER_NAME}")
                   RAW_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads"
                   DOWNLOAD_LINKS_MD=""
                   ALL_LINKS=""
                   LINK_NUM=0
                   TOTAL_ARCHIVE_SIZE=0
-
-                  # List all parts (sorted)
-                  mapfile -t PART_FILES < <(ls "$BACKUP_DIR/$ARCHIVE_FOLDER/"*.7z* 2>/dev/null | sort)
-                  for part_file in "${PART_FILES[@]}"; do
+                  for part_file in $(ls "$BACKUP_DIR/$FOLDER_NAME/"*.7z.* 2>/dev/null | sort); do
                     [ -f "$part_file" ] || continue
                     PART_BASENAME=$(basename "$part_file")
                     PART_ENCODED=$(urlencode "${PART_BASENAME}")
@@ -501,20 +436,8 @@ jobs:
                   done
                   ARCHIVE_SIZE_MB=$(echo "scale=2; $TOTAL_ARCHIVE_SIZE / 1024 / 1024" | bc)
 
-                  # Get list of files inside the archive
-                  FIRST_ARCHIVE="${PART_FILES[0]}"
-                  ARCHIVE_CONTENTS=""
-                  if command -v 7z &>/dev/null && [ -f "$FIRST_ARCHIVE" ]; then
-                    ARCHIVE_CONTENTS=$(7z l "$FIRST_ARCHIVE" | awk 'BEGIN{flag=0} /^-{20,}/{flag++; next} flag==1 && /^-{20,}/{exit} flag==1 && NF{size=$1; name=$NF; gsub(/^ +| +$/,"",name); if(name!="") printf "| %s | %d bytes |\n", name, size}')
-                    if [ -z "$ARCHIVE_CONTENTS" ]; then
-                      ARCHIVE_CONTENTS="*Unable to list archive contents*"
-                    fi
-                  else
-                    ARCHIVE_CONTENTS="*7z not available*"
-                  fi
-
                   {
-                    echo "# ${ARCHIVE_FILE_BASE} Archive"
+                    echo "# ${ARCHIVE_NAME} Archive"
                     echo ""
                     echo "---"
                     echo ""
@@ -522,26 +445,13 @@ jobs:
                     echo ""
                     echo "| Property | Value |"
                     echo "|----------|-------|"
-                    echo "| **Archive Base Name** | \`${ARCHIVE_FILE_BASE}.7z\` |"
-                    echo "| **Total Size** | ${ARCHIVE_SIZE_MB} MB (${LINK_NUM} part(s)) |"
-                    echo "| **Compression** | 7‑Zip LZMA2 (level ${MX_LEVEL}) |"
+                    echo "| **Archive Name** | \`${ARCHIVE_NAME}.7z\` |"
+                    echo "| **Total Size** | ${ARCHIVE_SIZE_MB} MB (${LINK_NUM} parts) |"
+                    echo "| **Compression** | 7‑Zip LZMA2 compression (level ${MX_LEVEL}) |"
                     if [ -n "$ZIP_PASSWORD" ]; then
                       echo "| **Password** | \`${ZIP_PASSWORD}\` |"
                     fi
-                    echo "| **Job Started** | ${JOB_START_TIME} |"
                     echo "| **Status** | **Complete (100%)** |"
-                    echo ""
-                    echo "---"
-                    echo ""
-                    echo "## Included Files"
-                    echo ""
-                    if [ -n "$ARCHIVE_CONTENTS" ] && [ "$ARCHIVE_CONTENTS" != "*Unable to list archive contents*" ]; then
-                      echo "| File | Size |"
-                      echo "|------|------|"
-                      echo "$ARCHIVE_CONTENTS"
-                    else
-                      echo "$ARCHIVE_CONTENTS"
-                    fi
                     echo ""
                     echo "---"
                     echo ""
@@ -563,8 +473,8 @@ jobs:
                     echo ""
                     echo "## How to Extract"
                     echo ""
-                    echo "1. **Download all parts** (if multiple) or the single \`.7z\` file"
-                    echo "2. **Open** the first file (\`${PART_FILES[0]##*/}\`) with **7‑Zip**, **WinRAR**, or **Ark**"
+                    echo "1. **Download all parts** (\`.7z.001\`, \`.7z.002\`, ...)"
+                    echo "2. **Open** \`${ARCHIVE_NAME}.7z.001\` with **7‑Zip**, **WinRAR**, or **Ark**"
                     if [ -n "$ZIP_PASSWORD" ]; then
                       echo "3. **Enter the password** when prompted: \`${ZIP_PASSWORD}\`"
                       echo "4. **Extract** — all parts combine automatically"
@@ -575,7 +485,7 @@ jobs:
                     echo "---"
                     echo ""
                     echo "*This tool is provided as is*"
-                  } > "$BACKUP_DIR/$ARCHIVE_FOLDER/README.md"
+                  } > "$BACKUP_DIR/$FOLDER_NAME/README.md"
                 fi
               else
                 echo "No valid files to archive!"
@@ -584,64 +494,192 @@ jobs:
             rm -rf tmp_downloads
 
           else
-            # Normal mode: store all downloaded files AS‑IS in a single timestamped folder
-            DOWNLOAD_FOLDER=$(unique_timestamp_folder "$BACKUP_DIR" "download" "$TIMESTAMP_NOW")
-            mkdir -p "$BACKUP_DIR/$DOWNLOAD_FOLDER"
-            echo "Normal download folder: $BACKUP_DIR/$DOWNLOAD_FOLDER"
+            # Normal mode: each file gets its own archive (split if large)
+            for FILE in tmp_downloads/*; do
+              [ -f "$FILE" ] || continue
 
-            TOTAL_FILES=0
-            TOTAL_SIZE_BYTES=0
-            FILE_LIST_MD=""
-            for f in tmp_downloads/*; do
-              [ -f "$f" ] || continue
-              if [ -s "$f" ]; then
-                cp "$f" "$BACKUP_DIR/$DOWNLOAD_FOLDER/"
-                FSIZE=$(stat -c%s "$f" 2>/dev/null || echo 0)
-                TOTAL_SIZE_BYTES=$((TOTAL_SIZE_BYTES + FSIZE))
-                TOTAL_FILES=$((TOTAL_FILES + 1))
-                FILENAME=$(basename "$f")
-                FSIZE_MB=$(echo "scale=2; $FSIZE / 1024 / 1024" | bc)
-                FILE_LIST_MD="${FILE_LIST_MD}| \`${FILENAME}\` | ${FSIZE_MB} MB |"$'\n'
+              if [ ! -s "$FILE" ]; then
+                echo "WARNING: Skipping empty file: $FILE"
+                rm -f "$FILE"
+                continue
+              fi
+
+              SIZE=$(stat -c%s "$FILE")
+              if [ "$SIZE" -le 0 ]; then
+                echo "WARNING: File has zero or invalid size: $FILE"
+                rm -f "$FILE"
+                continue
+              fi
+
+              BASENAME=$(basename "$FILE")
+              BASENAME_NO_EXT="${BASENAME%.*}"
+              EXT="${BASENAME##*.}"
+
+              FOLDER_NAME=$(get_unique_folder "$BACKUP_DIR" "$BASENAME_NO_EXT")
+              mkdir -p "$BACKUP_DIR/$FOLDER_NAME"
+              FOLDER_ENCODED=$(urlencode "${FOLDER_NAME}")
+
+              MX_LEVEL=$(determine_compression_level "$SIZE" "$COMPRESSION_PRESET" "$CPU_CORES")
+              echo "Using compression level -mx=${MX_LEVEL} for ${BASENAME} (${SIZE} bytes)"
+
+              if [ "$SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
+                echo "$BASENAME is $(( SIZE / 1024 / 1024 ))MB - creating 7z multi‑volume archive (${PART_SIZE_MB}MB parts)"
+
+                ARCHIVE_BASE="$BACKUP_DIR/${FOLDER_NAME}/${FOLDER_NAME}"
+                create_high_ratio_archive "$FILE" "$ARCHIVE_BASE" "$PART_SIZE_MB" "no" "$ZIP_PASSWORD" "$MX_LEVEL"
+
+                PARTS_COUNT=$(ls "$BACKUP_DIR/${FOLDER_NAME}/"*.7z.* 2>/dev/null | wc -l)
+                echo "Parts created in folder $BACKUP_DIR/$FOLDER_NAME: $PARTS_COUNT files"
+
+                if [ "$PARTS_COUNT" -eq 0 ]; then
+                  echo "ERROR: No archive parts were created for $BASENAME"
+                  continue
+                fi
+
+                RAW_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads"
+                TOTAL_SIZE=0
+                DOWNLOAD_LINKS_MD=""
+                ALL_LINKS=""
+                LINK_NUM=0
+                for part_file in $(ls "$BACKUP_DIR/${FOLDER_NAME}/"*.7z.* 2>/dev/null | sort); do
+                  if [ -f "$part_file" ]; then
+                    PART_BASENAME=$(basename "$part_file")
+                    PART_ENCODED=$(urlencode "${PART_BASENAME}")
+                    RAW_LINK="${RAW_BASE}/${FOLDER_ENCODED}/${PART_ENCODED}"
+                    LINK_NUM=$((LINK_NUM + 1))
+                    DOWNLOAD_LINKS_MD="${DOWNLOAD_LINKS_MD}| ${LINK_NUM} | \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |"$'\n'
+                    ALL_LINKS="${ALL_LINKS}${RAW_LINK}"$'\n'
+                    PART_SIZE_BYTES=$(stat -c%s "$part_file" 2>/dev/null || echo 0)
+                    TOTAL_SIZE=$((TOTAL_SIZE + PART_SIZE_BYTES))
+                  fi
+                done
+                TOTAL_SIZE_MB=$(echo "scale=2; $TOTAL_SIZE / 1024 / 1024" | bc)
+
+                README_FILE="$BACKUP_DIR/${FOLDER_NAME}/README.md"
+                {
+                  printf '%s\n' "# ${BASENAME_NO_EXT}"
+                  printf '%s\n' ""
+                  printf '%s\n' "---"
+                  printf '%s\n' ""
+                  printf '%s\n' "## Download Information"
+                  printf '%s\n' ""
+                  printf '%s\n' "| Property | Value |"
+                  printf '%s\n' "|----------|-------|"
+                  printf '%s\n' "| **Original File** | \`${BASENAME}\` |"
+                  printf '%s\n' "| **Total Size** | **${PARTS_COUNT} parts** - **${TOTAL_SIZE_MB} MB** |"
+                  printf '%s\n' "| **Compression** | 7‑Zip LZMA2 compression (level ${MX_LEVEL}) |"
+                  if [ -n "$ZIP_PASSWORD" ]; then
+                    printf '%s\n' "| **Password** | \`${ZIP_PASSWORD}\` |"
+                  fi
+                  printf '%s\n' "| **Status** | **Complete (100%)** |"
+                  echo ""
+                  echo "---"
+                  echo ""
+                  echo "## Download Links"
+                  echo ""
+                  echo "| # | File | Link |"
+                  echo "|---|------|------|"
+                  printf '%s' "${DOWNLOAD_LINKS_MD}"
+                  echo ""
+                  echo "---"
+                  echo ""
+                  echo "## All Links (for Download Managers)"
+                  echo ""
+                  echo '```'
+                  printf '%s' "${ALL_LINKS}"
+                  echo '```'
+                  echo ""
+                  echo "---"
+                  echo ""
+                  echo "## How to Extract"
+                  echo ""
+                  echo "1. **Download all parts** (\`.7z.001\`, \`.7z.002\`, ...)"
+                  echo "2. **Open** \`${FOLDER_NAME}.7z.001\` with **7‑Zip**, **WinRAR**, or **Ark**"
+                  if [ -n "$ZIP_PASSWORD" ]; then
+                    echo "3. **Enter the password** when prompted: \`${ZIP_PASSWORD}\`"
+                    echo "4. **Extract** — all parts combine automatically"
+                  else
+                    echo "3. **Extract** — all parts combine automatically"
+                  fi
+                  echo ""
+                  echo "---"
+                  echo ""
+                  echo "*This tool is provided as is*"
+                } > "$README_FILE"
+
+                echo "Created README.md for split 7z archive"
+
               else
-                echo "Skipping empty file: $f"
+                echo "$BASENAME - creating single 7z archive in folder: $BACKUP_DIR/$FOLDER_NAME"
+
+                ARCHIVE_BASE="$BACKUP_DIR/${FOLDER_NAME}/${FOLDER_NAME}"
+                create_high_ratio_archive "$FILE" "$ARCHIVE_BASE" "" "no" "$ZIP_PASSWORD" "$MX_LEVEL"
+
+                if [ ! -s "${ARCHIVE_BASE}.7z" ]; then
+                  echo "ERROR: Failed to create archive for $BASENAME"
+                  rm -f "${ARCHIVE_BASE}.7z"
+                  continue
+                fi
+
+                RAW_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads"
+                SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
+                FILE_ENCODED=$(urlencode "${FOLDER_NAME}.7z")
+                RAW_LINK="${RAW_BASE}/${FOLDER_ENCODED}/${FILE_ENCODED}"
+
+                README_FILE="$BACKUP_DIR/${FOLDER_NAME}/README.md"
+                {
+                  printf '%s\n' "# ${BASENAME_NO_EXT}"
+                  printf '%s\n' ""
+                  printf '%s\n' "---"
+                  printf '%s\n' ""
+                  printf '%s\n' "## Download Information"
+                  printf '%s\n' ""
+                  printf '%s\n' "| Property | Value |"
+                  printf '%s\n' "|----------|-------|"
+                  printf '%s\n' "| **Original File** | \`${BASENAME}\` |"
+                  printf '%s\n' "| **Size** | ${SIZE_MB} MB |"
+                  printf '%s\n' "| **Compression** | 7‑Zip LZMA2 compression (level ${MX_LEVEL}) |"
+                  if [ -n "$ZIP_PASSWORD" ]; then
+                    printf '%s\n' "| **Password** | \`${ZIP_PASSWORD}\` |"
+                  fi
+                  printf '%s\n' "| **Status** | **Complete (100%)** |"
+                  echo ""
+                  echo "---"
+                  echo ""
+                  echo "## Download Link"
+                  echo ""
+                  echo "| File | Link |"
+                  echo "|------|------|"
+                  printf '%s\n' "| \`${FOLDER_NAME}.7z\` | [Download](${RAW_LINK}) |"
+                  echo ""
+                  echo "---"
+                  echo ""
+                  echo "## All Links (for Download Managers)"
+                  echo ""
+                  echo '```'
+                  printf '%s\n' "${RAW_LINK}"
+                  echo '```'
+                  echo ""
+                  echo "---"
+                  echo ""
+                  echo "## How to Extract"
+                  echo ""
+                  echo "1. **Open** \`${FOLDER_NAME}.7z\` with **7‑Zip**, **WinRAR**, or **Ark**"
+                  if [ -n "$ZIP_PASSWORD" ]; then
+                    echo "2. **Enter the password** when prompted: \`${ZIP_PASSWORD}\`"
+                    echo "3. **Extract** the file"
+                  else
+                    echo "2. **Extract** the file"
+                  fi
+                  echo ""
+                  echo "---"
+                  echo ""
+                  echo "*This tool is provided as is*"
+                } > "$README_FILE"
+
+                echo "Created single 7z archive and README.md"
               fi
             done
-
-            TOTAL_SIZE_MB=$(echo "scale=2; $TOTAL_SIZE_BYTES / 1024 / 1024" | bc)
-
-            {
-              echo "# Downloaded Files"
-              echo ""
-              echo "---"
-              echo ""
-              echo "## Download Information"
-              echo ""
-              echo "| Property | Value |"
-              echo "|----------|-------|"
-              echo "| **Folder** | \`${DOWNLOAD_FOLDER}\` |"
-              echo "| **Total Files** | ${TOTAL_FILES} |"
-              echo "| **Total Size** | ${TOTAL_SIZE_MB} MB |"
-              echo "| **Job Started** | ${JOB_START_TIME} |"
-              echo "| **Mode** | Normal (no compression) |"
-              echo "| **Status** | **Complete (100%)** |"
-              echo ""
-              echo "---"
-              echo ""
-              echo "## Included Files"
-              echo ""
-              if [ $TOTAL_FILES -gt 0 ]; then
-                echo "| File | Size |"
-                echo "|------|------|"
-                printf '%s' "$FILE_LIST_MD"
-              else
-                echo "*No valid files were downloaded*"
-              fi
-              echo ""
-              echo "---"
-              echo ""
-              echo "*This tool is provided as is*"
-            } > "$BACKUP_DIR/$DOWNLOAD_FOLDER/README.md"
-
             rm -rf tmp_downloads
           fi
 
@@ -673,131 +711,22 @@ jobs:
             python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
           }
 
-          # ---- Helper: parse timestamp from folder name ----
-          parse_timestamp() {
-            local FOLDER="$1"
-            # match download_YYYYMMDD_HHMMSS or archive_YYYYMMDD_HHMMSS
-            if [[ "$FOLDER" =~ ^(download|archive)_([0-9]{8})_([0-9]{6}) ]]; then
-              local DATE_PART="${BASH_REMATCH[2]}"
-              local TIME_PART="${BASH_REMATCH[3]}"
-              echo "${DATE_PART:0:4}-${DATE_PART:4:2}-${DATE_PART:6:2} ${TIME_PART:0:2}:${TIME_PART:2:2}:${TIME_PART:4:2} UTC"
-            else
-              echo "unknown"
-            fi
-          }
-
-          # ---- Helper: generate stair-format file list (first 5) ----
-          generate_file_preview() {
-            local FOLDER_PATH="$1"
-            local IS_ARCHIVE="$2"
-            local PREVIEW=""
-            local COUNT=0
-            local TOTAL_IN=0
-            if [ "$IS_ARCHIVE" = true ]; then
-              # archive: use 7z l on first part
-              local FIRST_ARCHIVE=$(ls "$FOLDER_PATH"/*.7z 2>/dev/null | head -1)
-              [ -z "$FIRST_ARCHIVE" ] && FIRST_ARCHIVE=$(ls "$FOLDER_PATH"/*.7z.001 2>/dev/null | head -1)
-              if [ -n "$FIRST_ARCHIVE" ] && command -v 7z &>/dev/null; then
-                local RAW_LIST=$(7z l "$FIRST_ARCHIVE" | awk 'BEGIN{flag=0} /^-{20,}/{flag++; next} flag==1 && /^-{20,}/{exit} flag==1 && NF{size=$1; name=$NF; gsub(/^ +| +$/,"",name); if(name!="") print name, size}')
-                TOTAL_IN=$(echo "$RAW_LIST" | wc -l)
-                local LINE
-                while IFS= read -r line; do
-                  [ -z "$line" ] && continue
-                  COUNT=$((COUNT+1))
-                  if [ $COUNT -le 5 ]; then
-                    local FNAME=$(echo "$line" | awk '{print $1}')
-                    local FSIZE=$(echo "$line" | awk '{print $2}')
-                    PREVIEW="${PREVIEW}│   ├── ${FNAME} (${FSIZE} bytes)"$'\n'
-                  fi
-                done <<< "$RAW_LIST"
-                if [ $TOTAL_IN -gt 5 ]; then
-                  PREVIEW="${PREVIEW}│   └── ... and $((TOTAL_IN - 5)) more file(s)"$'\n'
-                fi
-              else
-                PREVIEW="│   └── (cannot list archive contents)"$'\n'
-              fi
-            else
-              # normal folder
-              local RAW_LIST=$(ls -p "$FOLDER_PATH" | grep -v '/')
-              TOTAL_IN=$(echo "$RAW_LIST" | wc -l)
-              local LINE
-              while IFS= read -r line; do
-                [ -z "$line" ] && continue
-                COUNT=$((COUNT+1))
-                if [ $COUNT -le 5 ]; then
-                  local FP="${FOLDER_PATH}/${line}"
-                  local FSIZE=0
-                  [ -f "$FP" ] && FSIZE=$(stat -c%s "$FP" 2>/dev/null || echo 0)
-                  PREVIEW="${PREVIEW}│   ├── ${line} (${FSIZE} bytes)"$'\n'
-                fi
-              done <<< "$RAW_LIST"
-              if [ $TOTAL_IN -gt 5 ]; then
-                PREVIEW="${PREVIEW}│   └── ... and $((TOTAL_IN - 5)) more file(s)"$'\n'
-              fi
-            fi
-            echo "$PREVIEW"
-          }
-
-          # ---- Build detailed downloads/README.md ----
           {
             echo "# Downloaded list :"
             echo ""
-            echo "| # | Folder | Size | Parts | DateTime |"
-            echo "|---|--------|------|-------|----------|"
-            local idx=1
-            for FOLDER in $FOLDERS; do
-              FOLDER_ENCODED=$(urlencode "${FOLDER}")
-              FOLDER_PATH="downloads/${FOLDER}"
-              SIZE=$(du -sh "$FOLDER_PATH" 2>/dev/null | cut -f1)
-              PARTS=0
-              IS_ARCHIVE=false
-              if ls "$FOLDER_PATH"/*.7z* 1>/dev/null 2>&1; then
-                IS_ARCHIVE=true
-                PARTS=$(ls "$FOLDER_PATH"/*.7z.* 2>/dev/null | wc -l)
-                # If no split parts, check for single .7z
-                if [ "$PARTS" -eq 0 ] && [ -f "$FOLDER_PATH"/*.7z ]; then
-                  PARTS=1
-                fi
+            echo "$FOLDERS" | while read -r FOLDER; do
+              if [ -n "$FOLDER" ]; then
+                FOLDER_ENCODED=$(urlencode "${FOLDER}")
+                echo "- [${FOLDER}](./${FOLDER_ENCODED})"
               fi
-              DATETIME=$(parse_timestamp "$FOLDER")
-              echo "| $idx | [${FOLDER}](${FOLDER_ENCODED}/) | ${SIZE} | ${PARTS} | ${DATETIME} |"
-              idx=$((idx+1))
             done
             echo ""
-            echo "---"
-            echo ""
-            # Detailed stair format for each folder
-            idx=1
-            for FOLDER in $FOLDERS; do
-              FOLDER_ENCODED=$(urlencode "${FOLDER}")
-              FOLDER_PATH="downloads/${FOLDER}"
-              SIZE=$(du -sh "$FOLDER_PATH" 2>/dev/null | cut -f1)
-              IS_ARCHIVE=false
-              PARTS=0
-              if ls "$FOLDER_PATH"/*.7z* 1>/dev/null 2>&1; then
-                IS_ARCHIVE=true
-                PARTS=$(ls "$FOLDER_PATH"/*.7z.* 2>/dev/null | wc -l)
-                [ "$PARTS" -eq 0 ] && [ -f "$FOLDER_PATH"/*.7z ] && PARTS=1
-              fi
-              DATETIME=$(parse_timestamp "$FOLDER")
-              echo "### ${idx}. [${FOLDER}](${FOLDER_ENCODED}/) ($SIZE)"
-              echo ""
-              echo "- **DateTime:** ${DATETIME}"
-              if [ "$IS_ARCHIVE" = true ]; then
-                echo "- **Archive parts:** ${PARTS}"
-              fi
-              echo "- **Contents:**"
-              PREVIEW=$(generate_file_preview "$FOLDER_PATH" "$IS_ARCHIVE")
-              echo "$PREVIEW"
-              echo ""
-              idx=$((idx+1))
-            done
             echo "---"
             echo ""
             echo "*This tool is provided as is*"
           } > "downloads/README.md"
 
-          echo "downloads/README.md created with detailed information"
+          echo "downloads/README.md created with list of downloaded files"
 
           SECTION_TITLE="Downloaded files in your GitHub repository :"
 
@@ -818,11 +747,13 @@ jobs:
             echo "## $SECTION_TITLE"
             echo ""
             COUNTER=1
-            for FOLDER in $FOLDERS; do
-              FOLDER_ENCODED=$(urlencode "${FOLDER}")
-              echo "${COUNTER}. [$FOLDER]($REPO_URL/$FOLDER_ENCODED)"
-              echo ""
-              COUNTER=$((COUNTER + 1))
+            echo "$FOLDERS" | while read -r FOLDER; do
+              if [ -n "$FOLDER" ]; then
+                FOLDER_ENCODED=$(urlencode "${FOLDER}")
+                echo "${COUNTER}. [$FOLDER]($REPO_URL/$FOLDER_ENCODED)"
+                echo ""
+                COUNTER=$((COUNTER + 1))
+              fi
             done
             echo "---"
           } >> README.md
