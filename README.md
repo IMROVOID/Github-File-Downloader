@@ -1,3 +1,43 @@
+# Universal File Downloader Action
+
+A powerful GitHub Actions workflow that downloads any file from the web directly into your repository. It automatically organizes, compresses, and splits large files, generates detailed readme files, and supports password-protected archives—all with zero local setup.
+
+> **Base project:** This workflow is heavily inspired by and builds upon the ideas from [UDL-3](https://github.com/nikzad-avasam/UDL-3/). Many thanks to the original authors for their pioneering work!
+
+## ✨ Key Features
+
+### General & Core Capabilities
+- **🌐 Universal Downloading:** Download any file from any direct URL. Supports single and batch downloads (multiple URLs separated by space).
+- **🔄 Robust Download Engine:** Combines `aria2` (for high-speed, multi-connection transfers) and `curl` (as a fallback) with intelligent retry logic to handle unstable connections.
+- **📦 Archive or Plain Storage:** Choose between `normal` mode (files saved as‑is) or `zip` mode (compressed into a single 7z archive).
+- **🔐 Optional Encryption:** Protect your archives with a password. The password is embedded in the generated README so you never lose it.
+- **📏 Configurable Splitting:** Split large archives into smaller parts (10–90 MB) to bypass upload size limits or make sharing easier.
+- **⚙️ Adaptive Compression:** Choose a preset (`auto`, `best`, `great`, `good`, `fast`, `fastest`); the `auto` mode intelligently picks the highest compression level that can finish within the action’s time limit.
+- **📂 Incremental Git Push:** Files are committed and pushed in small batches to avoid timeout errors, even with repositories weighing tens of gigabytes.
+
+### Special & Unique Features
+- **🕒 Timestamped Organization:** Every run creates a uniquely named folder like `download_20260514_140437` or `archive_20260514_140437`. No more overwritten files.
+- **📋 Auto‑Generated READMEs:** Each download folder/archive automatically gets a comprehensive `README.md` that includes:
+  - List of all files with their sizes
+  - Job execution start time
+  - Compression level and number of parts (if archived)
+  - Contents of the 7z archive (so you know exactly what’s inside without downloading)
+- **🏗️ Stair‑Format Tree Listing:** The main `downloads/README.md` shows a tree view of each folder’s contents (first 5 items) along with size, part count, and timestamp—perfect for quick browsing.
+- **📎 One‑Click Copy All Links:** Every README includes a “Download Manager” block containing all part links, ready to be copied and pasted into tools like JDownloader.
+- **🏋️ Heavy File Handling:** Tested with files up to 28 GB, and capable of handling downloads above 50 GB thanks to smart batching and resume‑friendly transport.
+- **🧠 Smart Archive Naming:** In `zip` mode, if only one file is downloaded, the archive takes its name (shortened if it’s too long) instead of a generic name—keeping things human‑readable.
+
+## 📁 Project Structure
+
+```
+.
+├── .github
+│   └── workflows
+│       └── download.yml          # Main workflow definition
+├── downloads                     # (Created after first run) All downloaded content
+├── README.md                     # This file
+└── LICENSE                       # GNU GPL v3.0
+```
 
 The entire logic resides in a single workflow file. No external build steps or dependencies—just fork, configure, and run.
 
