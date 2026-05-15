@@ -1,43 +1,85 @@
-# ⬇️ Universal File Downloader & 🌐 Web Browser Integration
 
-This repository provides a powerful, automated tool for downloading files from any source within GitHub and includes an integrated web browser feature.
+The entire logic resides in a single workflow file. No external build steps or dependencies—just fork, configure, and run.
 
-## ✨ Key Features
-*   ✅ **Universal Downloading:** Download any file from anywhere on GitHub.
-*   ✅ **Large File Support:** Supports multi-gigabyte downloads.
-*   🔐 **Encryption:** Optional password protection for downloaded archives.
-*   ✅ **Reliable Downloads:** Utilizes the `aria2` package for robust downloading.
-*   ✅ **Automatic Archiving:** Automatically compresses and archives all downloaded files into ZIP format, supporting chunking (e.g., 90MB parts).
-*   ✅ **Automation:** Performs all operations automatically without complex manual configuration.
-*   ✅ **Batch Downloading:** Supports simultaneous download of multiple URLs.
-*   ✅ **Organization:** Files are grouped into dedicated folders named after the original file/group.
-*   ✅ **Persistence:** Downloads are permanently saved within your own GitHub repository structure.
-*   ✅ **High Capacity:** Tested successfully for large files (up to 28GB).
+## ⚙️ How to Use
 
-**⚠️ Important Notes:**
-*   Please read the "Updates" section at the bottom of this README for the latest information.
-*   Some local Iranian servers may block external IPs; therefore, downloading content from services like Soft98 might not be possible using this tool.
-*   🌐 **Web Browser Added:** Check the Updates section for instructions on how to use the new web browser feature.
-*   📹 A video tutorial on using this tool has been added to the end of this document.
+1. **Fork the repository** to your own GitHub account.
+2. Go to the **Actions** tab in your fork.
+3. Select the **⬇️ 01- Download URL** workflow on the left.
+4. Click **“Run workflow”** and fill in the inputs:
+   - **URLs:** The download link(s), separated by spaces.
+   - **Mode:** `normal` (store files as‑is) or `zip` (compress into a 7z archive).
+   - **Part size:** Split archive part size in MB (10–90, default 45).
+   - **Password:** (Optional) Password to encrypt the archive.
+   - **Compression Preset:** Choose a compression level (auto recommended).
+5. Click **“Run workflow”** and wait for the action to complete.
+6. After completion, your files will appear in the `downloads/` folder, organised by timestamp and accompanied by a detailed `README.md`.
 
-## 🔧 Installation Guide
-1.  On your fork of this repository, click the 'Fork' button at the top.
-2.  If necessary, rename your fork and then click 'Create Fork'. Your repository is now ready for use via the Actions tab.
+## 🔧 How to Modify
 
-## 🎯 How to Download Files from GitHub
-1.  Navigate to the **Actions** tab in your own (forked) repository.
-2.  On the left sidebar, select the `download-from-url` workflow.
-3.  Click 'Run workflow' on the right side panel.
-4.  In the first input box, paste the URL or multiple URLs separated by spaces.
-5.  If you require password protection for the archive, enter your desired password in the `password` field.
-6.  Click 'Run workflow' to start the download process.
+The entire behaviour is controlled by the YAML file located at `.github/workflows/download.yml`. You can edit it directly in your fork to change:
 
-## 📂 Where are the Downloaded Files?
-*   All downloaded files will be placed within a dedicated folder named after the original file/group inside the `/downloads` directory.
-*   If your file is very large, it will be split into multiple ZIP parts (e.g., part.zip, part.z01). You must download and combine all parts using tools like 7-Zip or WinRAR to extract the complete file.
+- Default split size or compression level.
+- Maximum download time (`timeout-minutes`).
+- Git push batching parameters.
+- The naming conventions for folders and archives.
+- The contents of the auto‑generated README files.
 
-## 🔔 Stay Updated
-We continuously update this tool to improve functionality and fix bugs. Before use, ensure your fork is synchronized with the main repository by clicking 'Sync fork' on your forked repo page, followed by running 'Update branch'. If no updates are available, the sync button will be disabled.
+Just open the file in GitHub’s editor, make your changes, and commit. The next run will use your custom settings.
 
-## 🌐 International Internet Download Support
-If you cannot use this tool but require a specific file, please send us the file name or download link to our support team so we can assist you in accessing it via local Iranian internet connections. Please send your request via Iranian messaging apps to @ask_here or call 09354887344.
+## 🛠️ Technologies & Libraries Used
+
+| Library / Tool | Description |
+| :--- | :--- |
+| **GitHub Actions** | Hosts and orchestrates the entire workflow. |
+| **aria2** | Lightweight multi‑connection download utility. |
+| **p7zip‑full** | Command‑line version of 7‑Zip, providing LZMA2 compression and splitting. |
+| **curl** | Transfers data from URLs, used as a fallback downloader. |
+| **bc** | Arbitrary precision calculator for estimating compression times. |
+| **Python 3** | Used for URL‑encoding helper functions. |
+
+## 🙏 Credits
+
+This project started from the excellent work of the [UDL-3](https://github.com/nikzad-avasam/UDL-3/) repository. The foundation, inspiration, and many core ideas came from there. Huge thanks to the original authors!
+
+## 📜 License
+
+This project is open-source and licensed under the **[GNU General Public License v3.0 (GPL-3.0)](https://choosealicense.com/licenses/gpl-3.0/)**.
+
+### Summary of Key Requirements
+
+The GPL-3.0 is a strong copyleft license that ensures the software remains free. If you use, modify, or distribute this code, you must adhere to the following:
+
+* **Disclose Source:** You must make the source code available when you distribute the software.
+* **License & Copyright Notice:** You must include a copy of the license and the original author's copyright notice.
+* **Same License (Copyleft):** Any modifications or derived works must also be licensed under GPL-3.0.
+* **State Changes:** You must clearly indicate if you have modified the original files.
+* **No Warranty:** This software is provided "as is" without any warranty of any kind.
+
+> This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+>
+> This program is distributed in the hope that it will be useful, but **WITHOUT ANY WARRANTY**; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+For full details, please refer to the [LICENSE](/LICENSE) file in this repository.
+
+---
+
+## © About the Developer
+
+I'm a passionate professional specializing in Graphic Design, Web Development, and cross-platform app development with Dart & Flutter. I thrive on turning innovative ideas into reality, whether it's a stunning visual, a responsive website, or a polished desktop app like this one. I also develop immersive games using Unreal Engine.
+
+* **Website:** [rovoid.ir](https://rovoid.ir)
+* **GitHub:** [IMROVOID](https://github.com/IMROVOID)
+* **LinkedIn:** [Roham Andarzgou](https://www.linkedin.com/in/roham-andarzgouu)
+
+### 🙏 Support This Project
+
+If you find this application useful, please consider a donation. As I am based in Iran, cryptocurrency is the only way I can receive support. Thank you!
+
+| Cryptocurrency | Address |
+| :--- | :--- |
+| **Bitcoin** (BTC) | `bc1qd35yqx3xt28dy6fd87xzd62cj7ch35p68ep3p8` |
+| **Ethereum** (ETH) | `0xA39Dfd80309e881cF1464dDb00cF0a17bF0322e3` |
+| **USDT** (TRC20) | `THMe6FdXkA2Pw45yKaXBHRnkX3fjyKCzfy` |
+| **Solana** (SOL) | `9QZHMTN4Pu6BCxiN2yABEcR3P4sXtBjkog9GXNxWbav1` |
+| **TON** | `UQCp0OawnofpZTNZk-69wlqIx_wQpzKBgDpxY2JK5iynh3mC` |
