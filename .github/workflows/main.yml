@@ -91,22 +91,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y aria2 p7zip-full curl bc
 
-      # --- Step 4: Core Download Logic with Timestamp & Duration Tracking ---
+      # --- Step 4: Core Download Logic ---
       - name: Downloader - Start
         run: |
           echo "🏷️  GitHub File Downloader"
           echo ""
 
-      - name: Download and Archive Files
+      - name: Download files
         run: |
-          # Capture start time for duration calculation
-          START_EPOCH=$(date +%s)
-          START_TIME=$(date +%Y%m%d_%H%M%S)
-          START_HUMAN=$(date '+%Y-%m-%d %H:%M:%S UTC')
-          echo "START_EPOCH=$START_EPOCH" >> $GITHUB_ENV
-          echo "START_TIME=$START_TIME" >> $GITHUB_ENV
-          echo "START_HUMAN=$START_HUMAN" >> $GITHUB_ENV
-
           MODE="${{ github.event.inputs.mode }}"
           URLS="${{ github.event.inputs.urls }}"
           ZIP_PASSWORD="${{ github.event.inputs.password }}"
@@ -134,20 +126,10 @@ jobs:
           mkdir -p "$BACKUP_DIR"
           echo "$BACKUP_DIR" > /tmp/backup_dir_path.txt
 
-          # Create run‑specific top folder
-          if [ "$MODE" = "zip" ]; then
-            RUN_FOLDER_NAME="archive_${START_TIME}"
-          else
-            RUN_FOLDER_NAME="download_${START_TIME}"
-          fi
-          RUN_FOLDER_PATH="$BACKUP_DIR/$RUN_FOLDER_NAME"
-          mkdir -p "$RUN_FOLDER_PATH"
-          echo "$RUN_FOLDER_NAME" > /tmp/run_folder_name.txt
-          echo "Run folder: $RUN_FOLDER_PATH"
-
           echo "Downloading with mode: $MODE"
           echo "Part size: ${PART_SIZE_MB} MB (clamped to 10–90 range)"
           echo "Compression preset: ${COMPRESSION_PRESET}"
+          echo "Backup directory: $BACKUP_DIR"
           if [ -n "$ZIP_PASSWORD" ]; then
             echo "Password protection: ENABLED"
           else
@@ -185,12 +167,12 @@ jobs:
           get_unique_folder() {
             local BASE_PATH="$1"
             local NAME="$2"
-            if [ ! -d "$BASE_PATH/$NAME" ]; then
+            if [ ! -d "$BASE_PATH/$NAME" ] && [ ! -d "$BACKUP_DIR/$NAME" ]; then
               echo "$NAME"
               return
             fi
             local RANDOM_SUFFIX=$(get_random_word)
-            while [ -d "$BASE_PATH/${NAME}_${RANDOM_SUFFIX}" ]; do
+            while [ -d "$BASE_PATH/${NAME}_${RANDOM_SUFFIX}" ] || [ -d "$BACKUP_DIR/${NAME}_${RANDOM_SUFFIX}" ]; do
               RANDOM_SUFFIX=$(get_random_word)
             done
             echo "${NAME}_${RANDOM_SUFFIX}"
@@ -205,8 +187,8 @@ jobs:
             local ERROR_MSG="$2"
             local URL="$3"
             local BASENAME_NO_EXT="${FILENAME%.*}"
-            local FOLDER_NAME=$(get_unique_folder "$RUN_FOLDER_PATH" "$BASENAME_NO_EXT")
-            mkdir -p "$RUN_FOLDER_PATH/$FOLDER_NAME"
+            local FOLDER_NAME=$(get_unique_folder "$BACKUP_DIR" "$BASENAME_NO_EXT")
+            mkdir -p "$BACKUP_DIR/$FOLDER_NAME"
             {
               echo "# ${FILENAME} - Download Failed"
               echo ""
@@ -242,8 +224,8 @@ jobs:
               echo "---"
               echo ""
               echo "*This tool is provided as is*"
-            } > "$RUN_FOLDER_PATH/$FOLDER_NAME/README.md"
-            echo "Error file created: $RUN_FOLDER_PATH/$FOLDER_NAME/README.md"
+            } > "$BACKUP_DIR/$FOLDER_NAME/README.md"
+            echo "Error file created: $BACKUP_DIR/$FOLDER_NAME/README.md"
           }
 
           download_with_retry() {
@@ -326,7 +308,6 @@ jobs:
             return 1
           }
 
-          # Download all URLs
           for URL in $URLS; do
             FILENAME=$(basename "$URL" | sed 's/%20/ /g' | sed 's/%2F/-/g' | sed 's/[?#].*//')
             FILENAME=$(echo "$FILENAME" | sed 's/[<>:"|?*]/_/g')
@@ -374,19 +355,6 @@ jobs:
             echo "$CHOSEN_LEVEL"
           }
 
-          # ---------- Helper to list files with sizes ----------
-          list_files_with_sizes() {
-            local DIR="$1"
-            for f in "$DIR"/*; do
-              if [ -f "$f" ]; then
-                local name=$(basename "$f")
-                local size=$(stat -c%s "$f" 2>/dev/null || echo 0)
-                local size_mb=$(echo "scale=2; $size/1048576" | bc)
-                echo "- \`$name\` (${size_mb} MB)"
-              fi
-            done
-          }
-
           # ---------- Archive creation ----------
           create_high_ratio_archive() {
             local SOURCE_PATH="$1"
@@ -417,45 +385,21 @@ jobs:
           if [ "$MODE" = "zip" ]; then
             # Combined archive of all downloaded files
             if [ -n "$(ls -A tmp_downloads 2>/dev/null)" ]; then
-              # Count files and collect info
-              FILE_COUNT=0
-              FILE_LIST_ITEMS=""
-              TOTAL_SIZE=0
-              for f in tmp_downloads/*; do
-                if [ -f "$f" ] && [ -s "$f" ]; then
-                  FILE_COUNT=$((FILE_COUNT + 1))
-                  fname=$(basename "$f")
-                  fsize=$(stat -c%s "$f" 2>/dev/null || echo 0)
-                  TOTAL_SIZE=$((TOTAL_SIZE + fsize))
-                  fsize_mb=$(echo "scale=2; $fsize/1048576" | bc)
-                  FILE_LIST_ITEMS="${FILE_LIST_ITEMS}- \`$fname\` (${fsize_mb} MB)\n"
-                fi
-              done
-
-              # Determine archive name: for single file, use filename (truncated)
-              if [ $FILE_COUNT -eq 1 ]; then
-                SINGLE_FILE=$(basename $(ls tmp_downloads/* | head -1))
-                BASENAME_NO_EXT="${SINGLE_FILE%.*}"
-                # Truncate to max 50 chars
-                if [ ${#BASENAME_NO_EXT} -gt 50 ]; then
-                  BASENAME_NO_EXT="${BASENAME_NO_EXT:0:47}..."
-                fi
-                ARCHIVE_NAME="$BASENAME_NO_EXT"
-              else
-                ARCHIVE_NAME="archive_${START_TIME}"
-              fi
-
-              FOLDER_NAME=$(get_unique_folder "$RUN_FOLDER_PATH" "$ARCHIVE_NAME")
-              mkdir -p "$RUN_FOLDER_PATH/$FOLDER_NAME"
-              echo "Creating 7z multi‑volume archive in folder: $RUN_FOLDER_PATH/$FOLDER_NAME"
+              ARCHIVE_NAME="archive_$(date +%Y%m%d_%H%M%S)"
+              FOLDER_NAME=$(get_unique_folder "$BACKUP_DIR" "$ARCHIVE_NAME")
+              mkdir -p "$BACKUP_DIR/$FOLDER_NAME"
+              echo "Creating 7z multi‑volume archive in folder: $BACKUP_DIR/$FOLDER_NAME"
 
               TEMP_ARCHIVE_DIR="/tmp/7z_temp_$$"
               mkdir -p "$TEMP_ARCHIVE_DIR"
               VALID_FILES=0
+              TOTAL_SIZE=0
               for f in tmp_downloads/*; do
                 if [ -f "$f" ] && [ -s "$f" ]; then
                   cp "$f" "$TEMP_ARCHIVE_DIR/"
                   VALID_FILES=$((VALID_FILES + 1))
+                  FSIZE=$(stat -c%s "$f" 2>/dev/null || echo 0)
+                  TOTAL_SIZE=$((TOTAL_SIZE + FSIZE))
                 else
                   echo "Skipping empty or invalid file: $f"
                 fi
@@ -464,23 +408,22 @@ jobs:
               if [ $VALID_FILES -gt 0 ]; then
                 MX_LEVEL=$(determine_compression_level "$TOTAL_SIZE" "$COMPRESSION_PRESET" "$CPU_CORES")
                 echo "Using compression level -mx=${MX_LEVEL} for combined archive (${TOTAL_SIZE} bytes total)"
-                ARCHIVE_BASE="$RUN_FOLDER_PATH/$FOLDER_NAME/$ARCHIVE_NAME"
+                ARCHIVE_BASE="$BACKUP_DIR/$FOLDER_NAME/$ARCHIVE_NAME"
                 create_high_ratio_archive "$TEMP_ARCHIVE_DIR" "$ARCHIVE_BASE" "$PART_SIZE_MB" "yes" "$ZIP_PASSWORD" "$MX_LEVEL"
                 rm -rf "$TEMP_ARCHIVE_DIR"
 
-                PARTS_COUNT=$(ls "$RUN_FOLDER_PATH/$FOLDER_NAME/"*.7z.* 2>/dev/null | wc -l)
+                PARTS_COUNT=$(ls "$BACKUP_DIR/$FOLDER_NAME/"*.7z.* 2>/dev/null | wc -l)
                 if [ "$PARTS_COUNT" -eq 0 ]; then
                   echo "ERROR: No archive parts were created!"
-                  rm -f "$RUN_FOLDER_PATH/$FOLDER_NAME/$ARCHIVE_NAME".7z.*
+                  rm -f "$BACKUP_DIR/$FOLDER_NAME/$ARCHIVE_NAME".7z.*
                 else
                   FOLDER_ENCODED=$(urlencode "${FOLDER_NAME}")
-                  RUN_FOLDER_ENCODED=$(urlencode "${RUN_FOLDER_NAME}")
-                  RAW_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${RUN_FOLDER_ENCODED}"
+                  RAW_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads"
                   DOWNLOAD_LINKS_MD=""
                   ALL_LINKS=""
                   LINK_NUM=0
                   TOTAL_ARCHIVE_SIZE=0
-                  for part_file in $(ls "$RUN_FOLDER_PATH/$FOLDER_NAME/"*.7z.* 2>/dev/null | sort); do
+                  for part_file in $(ls "$BACKUP_DIR/$FOLDER_NAME/"*.7z.* 2>/dev/null | sort); do
                     [ -f "$part_file" ] || continue
                     PART_BASENAME=$(basename "$part_file")
                     PART_ENCODED=$(urlencode "${PART_BASENAME}")
@@ -493,12 +436,6 @@ jobs:
                   done
                   ARCHIVE_SIZE_MB=$(echo "scale=2; $TOTAL_ARCHIVE_SIZE / 1024 / 1024" | bc)
 
-                  # Build files included list (first 5, with count)
-                  INCLUDED_FILES_MD=""
-                  if [ -n "$FILE_LIST_ITEMS" ]; then
-                    INCLUDED_FILES_MD="$FILE_LIST_ITEMS"
-                  fi
-
                   {
                     echo "# ${ARCHIVE_NAME} Archive"
                     echo ""
@@ -508,20 +445,13 @@ jobs:
                     echo ""
                     echo "| Property | Value |"
                     echo "|----------|-------|"
-                    echo "| **Run Date** | ${START_HUMAN} |"
                     echo "| **Archive Name** | \`${ARCHIVE_NAME}.7z\` |"
                     echo "| **Total Size** | ${ARCHIVE_SIZE_MB} MB (${LINK_NUM} parts) |"
-                    echo "| **Compression** | 7‑Zip LZMA2 (level ${MX_LEVEL}) |"
+                    echo "| **Compression** | 7‑Zip LZMA2 compression (level ${MX_LEVEL}) |"
                     if [ -n "$ZIP_PASSWORD" ]; then
                       echo "| **Password** | \`${ZIP_PASSWORD}\` |"
                     fi
                     echo "| **Status** | **Complete (100%)** |"
-                    echo ""
-                    echo "---"
-                    echo ""
-                    echo "## Files Included"
-                    echo ""
-                    printf '%b' "$INCLUDED_FILES_MD"
                     echo ""
                     echo "---"
                     echo ""
@@ -555,7 +485,7 @@ jobs:
                     echo "---"
                     echo ""
                     echo "*This tool is provided as is*"
-                  } > "$RUN_FOLDER_PATH/$FOLDER_NAME/README.md"
+                  } > "$BACKUP_DIR/$FOLDER_NAME/README.md"
                 fi
               else
                 echo "No valid files to archive!"
@@ -564,7 +494,7 @@ jobs:
             rm -rf tmp_downloads
 
           else
-            # Normal mode: each file gets its own archive, all inside the timestamp folder
+            # Normal mode: each file gets its own archive (split if large)
             for FILE in tmp_downloads/*; do
               [ -f "$FILE" ] || continue
 
@@ -585,10 +515,9 @@ jobs:
               BASENAME_NO_EXT="${BASENAME%.*}"
               EXT="${BASENAME##*.}"
 
-              FOLDER_NAME=$(get_unique_folder "$RUN_FOLDER_PATH" "$BASENAME_NO_EXT")
-              mkdir -p "$RUN_FOLDER_PATH/$FOLDER_NAME"
+              FOLDER_NAME=$(get_unique_folder "$BACKUP_DIR" "$BASENAME_NO_EXT")
+              mkdir -p "$BACKUP_DIR/$FOLDER_NAME"
               FOLDER_ENCODED=$(urlencode "${FOLDER_NAME}")
-              RUN_FOLDER_ENCODED=$(urlencode "${RUN_FOLDER_NAME}")
 
               MX_LEVEL=$(determine_compression_level "$SIZE" "$COMPRESSION_PRESET" "$CPU_CORES")
               echo "Using compression level -mx=${MX_LEVEL} for ${BASENAME} (${SIZE} bytes)"
@@ -596,23 +525,23 @@ jobs:
               if [ "$SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
                 echo "$BASENAME is $(( SIZE / 1024 / 1024 ))MB - creating 7z multi‑volume archive (${PART_SIZE_MB}MB parts)"
 
-                ARCHIVE_BASE="$RUN_FOLDER_PATH/$FOLDER_NAME/$FOLDER_NAME"
+                ARCHIVE_BASE="$BACKUP_DIR/${FOLDER_NAME}/${FOLDER_NAME}"
                 create_high_ratio_archive "$FILE" "$ARCHIVE_BASE" "$PART_SIZE_MB" "no" "$ZIP_PASSWORD" "$MX_LEVEL"
 
-                PARTS_COUNT=$(ls "$RUN_FOLDER_PATH/$FOLDER_NAME/"*.7z.* 2>/dev/null | wc -l)
-                echo "Parts created in folder $RUN_FOLDER_PATH/$FOLDER_NAME: $PARTS_COUNT files"
+                PARTS_COUNT=$(ls "$BACKUP_DIR/${FOLDER_NAME}/"*.7z.* 2>/dev/null | wc -l)
+                echo "Parts created in folder $BACKUP_DIR/$FOLDER_NAME: $PARTS_COUNT files"
 
                 if [ "$PARTS_COUNT" -eq 0 ]; then
                   echo "ERROR: No archive parts were created for $BASENAME"
                   continue
                 fi
 
-                RAW_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${RUN_FOLDER_ENCODED}"
+                RAW_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads"
                 TOTAL_SIZE=0
                 DOWNLOAD_LINKS_MD=""
                 ALL_LINKS=""
                 LINK_NUM=0
-                for part_file in $(ls "$RUN_FOLDER_PATH/$FOLDER_NAME/"*.7z.* 2>/dev/null | sort); do
+                for part_file in $(ls "$BACKUP_DIR/${FOLDER_NAME}/"*.7z.* 2>/dev/null | sort); do
                   if [ -f "$part_file" ]; then
                     PART_BASENAME=$(basename "$part_file")
                     PART_ENCODED=$(urlencode "${PART_BASENAME}")
@@ -626,9 +555,7 @@ jobs:
                 done
                 TOTAL_SIZE_MB=$(echo "scale=2; $TOTAL_SIZE / 1024 / 1024" | bc)
 
-                # For normal mode, only one file is included
-                FILE_SIZE_MB=$(echo "scale=2; $SIZE / 1048576" | bc)
-                README_FILE="$RUN_FOLDER_PATH/$FOLDER_NAME/README.md"
+                README_FILE="$BACKUP_DIR/${FOLDER_NAME}/README.md"
                 {
                   printf '%s\n' "# ${BASENAME_NO_EXT}"
                   printf '%s\n' ""
@@ -638,20 +565,13 @@ jobs:
                   printf '%s\n' ""
                   printf '%s\n' "| Property | Value |"
                   printf '%s\n' "|----------|-------|"
-                  printf '%s\n' "| **Run Date** | ${START_HUMAN} |"
                   printf '%s\n' "| **Original File** | \`${BASENAME}\` |"
                   printf '%s\n' "| **Total Size** | **${PARTS_COUNT} parts** - **${TOTAL_SIZE_MB} MB** |"
-                  printf '%s\n' "| **Compression** | 7‑Zip LZMA2 (level ${MX_LEVEL}) |"
+                  printf '%s\n' "| **Compression** | 7‑Zip LZMA2 compression (level ${MX_LEVEL}) |"
                   if [ -n "$ZIP_PASSWORD" ]; then
                     printf '%s\n' "| **Password** | \`${ZIP_PASSWORD}\` |"
                   fi
                   printf '%s\n' "| **Status** | **Complete (100%)** |"
-                  echo ""
-                  echo "---"
-                  echo ""
-                  echo "## Files Included"
-                  echo ""
-                  echo "- \`${BASENAME}\` (${FILE_SIZE_MB} MB)"
                   echo ""
                   echo "---"
                   echo ""
@@ -687,12 +607,12 @@ jobs:
                   echo "*This tool is provided as is*"
                 } > "$README_FILE"
 
-                echo "Created split 7z archive and README.md"
+                echo "Created README.md for split 7z archive"
 
               else
-                echo "$BASENAME - creating single 7z archive in folder: $RUN_FOLDER_PATH/$FOLDER_NAME"
+                echo "$BASENAME - creating single 7z archive in folder: $BACKUP_DIR/$FOLDER_NAME"
 
-                ARCHIVE_BASE="$RUN_FOLDER_PATH/$FOLDER_NAME/$FOLDER_NAME"
+                ARCHIVE_BASE="$BACKUP_DIR/${FOLDER_NAME}/${FOLDER_NAME}"
                 create_high_ratio_archive "$FILE" "$ARCHIVE_BASE" "" "no" "$ZIP_PASSWORD" "$MX_LEVEL"
 
                 if [ ! -s "${ARCHIVE_BASE}.7z" ]; then
@@ -701,12 +621,12 @@ jobs:
                   continue
                 fi
 
-                RAW_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${RUN_FOLDER_ENCODED}"
+                RAW_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads"
                 SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
                 FILE_ENCODED=$(urlencode "${FOLDER_NAME}.7z")
                 RAW_LINK="${RAW_BASE}/${FOLDER_ENCODED}/${FILE_ENCODED}"
 
-                README_FILE="$RUN_FOLDER_PATH/$FOLDER_NAME/README.md"
+                README_FILE="$BACKUP_DIR/${FOLDER_NAME}/README.md"
                 {
                   printf '%s\n' "# ${BASENAME_NO_EXT}"
                   printf '%s\n' ""
@@ -716,20 +636,13 @@ jobs:
                   printf '%s\n' ""
                   printf '%s\n' "| Property | Value |"
                   printf '%s\n' "|----------|-------|"
-                  printf '%s\n' "| **Run Date** | ${START_HUMAN} |"
                   printf '%s\n' "| **Original File** | \`${BASENAME}\` |"
                   printf '%s\n' "| **Size** | ${SIZE_MB} MB |"
-                  printf '%s\n' "| **Compression** | 7‑Zip LZMA2 (level ${MX_LEVEL}) |"
+                  printf '%s\n' "| **Compression** | 7‑Zip LZMA2 compression (level ${MX_LEVEL}) |"
                   if [ -n "$ZIP_PASSWORD" ]; then
                     printf '%s\n' "| **Password** | \`${ZIP_PASSWORD}\` |"
                   fi
                   printf '%s\n' "| **Status** | **Complete (100%)** |"
-                  echo ""
-                  echo "---"
-                  echo ""
-                  echo "## Files Included"
-                  echo ""
-                  echo "- \`${BASENAME}\` (${SIZE_MB} MB)"
                   echo ""
                   echo "---"
                   echo ""
@@ -770,27 +683,13 @@ jobs:
             rm -rf tmp_downloads
           fi
 
-          # Capture end time and compute duration
-          END_EPOCH=$(date +%s)
-          DURATION_SEC=$((END_EPOCH - START_EPOCH))
-          DURATION_HUMAN=$(printf '%02dh:%02dm:%02ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))
-          echo "DURATION_HUMAN=$DURATION_HUMAN" >> $GITHUB_ENV
-          echo "Job duration: $DURATION_HUMAN"
-
-          # Append duration to every generated README.md inside RUN_FOLDER_PATH
-          find "$RUN_FOLDER_PATH" -name "README.md" -type f | while read -r readme; do
-            sed -i "/^| \\*\\*Status\\*\\* /a | **Job Duration** | ${DURATION_HUMAN} |" "$readme"
-          done
-
           echo ""
           echo "===== Backup folder contents ====="
           find "$BACKUP_DIR" -type f | head -50
 
-      # --- Step 5: Update README.md with detailed download links ---
       - name: Update README.md with download links
         run: |
           BACKUP_DIR=$(cat /tmp/backup_dir_path.txt)
-          RUN_FOLDER_NAME=$(cat /tmp/run_folder_name.txt)
           REPO_OWNER="${{ github.repository_owner }}"
           REPO_NAME="${{ github.event.repository.name }}"
           BRANCH="${GITHUB_REF_NAME}"
@@ -801,84 +700,34 @@ jobs:
             cp -r "$BACKUP_DIR"/* downloads/
           fi
 
-          # Function to extract info from a subfolder's README.md
-          extract_readme_info() {
-            local readme="$1"
-            local folder_name="$2"
-            local run_folder="$3"
+          FOLDERS=$(find downloads -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)
 
-            # Extract total size
-            total_size=$(grep -E "^\| \*\*Total Size\*\*" "$readme" | sed -E 's/.*\|\s*\*\*([^*]+)\*\*\s*\|\s*(.*?)\s*\|/\2/' | head -1)
-            # Extract parts count (if any)
-            parts=$(echo "$total_size" | grep -oE '[0-9]+ parts' | grep -oE '[0-9]+' | head -1)
-            # For single file, parts might be empty
-            if [ -z "$parts" ]; then
-              parts="1"
-            fi
-            # Extract list of files included
-            files_section=$(awk '/^## Files Included/,/^## /' "$readme" | grep '^- `' | head -5)
-            files_list=""
-            count=0
-            while IFS= read -r line; do
-              count=$((count+1))
-              files_list="${files_list}  ${line}\n"
-            done <<< "$files_section"
-            total_files=$(grep -c '^- `' "$readme")
-            if [ $total_files -gt 5 ]; then
-              files_list="${files_list}  - *and $((total_files-5)) more file(s)*\n"
-            fi
-            # Extract run date
-            run_date=$(grep -E "^\| \*\*Run Date\*\*" "$readme" | sed -E 's/.*\|\s*\*\*([^*]+)\*\*\s*\|\s*(.*?)\s*\|/\2/' | head -1)
-            if [ -z "$run_date" ]; then
-              run_date="${{ env.START_HUMAN }}"
-            fi
+          if [ -z "$FOLDERS" ]; then
+            echo "No folders found in downloads"
+            exit 0
+          fi
 
-            echo "total_size='$total_size'"
-            echo "parts='$parts'"
-            echo "files_list='$files_list'"
-            echo "run_date='$run_date'"
+          urlencode() {
+            python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
           }
 
-          # Build the top-level downloads/README.md
           {
-            echo "# 📦 Downloaded files"
+            echo "# Downloaded list :"
             echo ""
-            echo "This folder contains archives created by the GitHub File Downloader."
-            echo ""
-            echo "## Run folders"
-            echo ""
-          } > downloads/README.md
-
-          # Iterate over each run folder (download_* or archive_*)
-          for run_folder in downloads/*/; do
-            [ -d "$run_folder" ] || continue
-            run_name=$(basename "$run_folder")
-            # For each run folder, iterate over its subfolders (each containing an archive)
-            echo "### ${run_name}" >> downloads/README.md
-            echo "" >> downloads/README.md
-            echo "| Archive | Total Size | Parts | Files Included | Run Date |" >> downloads/README.md
-            echo "|---------|------------|-------|----------------|----------|" >> downloads/README.md
-
-            for subfolder in "$run_folder"*/; do
-              [ -d "$subfolder" ] || continue
-              readme_file="${subfolder}README.md"
-              if [ -f "$readme_file" ]; then
-                folder_name=$(basename "$subfolder")
-                eval "$(extract_readme_info "$readme_file" "$folder_name" "$run_name")"
-                # Escape pipes and newlines for markdown table
-                files_list_clean=$(echo -e "$files_list" | sed ':a;N;$!ba;s/\n/<br>/g' | sed 's/|/\\|/g')
-                echo "| \`${folder_name}\` | ${total_size} | ${parts} | ${files_list_clean} | ${run_date} |" >> downloads/README.md
+            echo "$FOLDERS" | while read -r FOLDER; do
+              if [ -n "$FOLDER" ]; then
+                FOLDER_ENCODED=$(urlencode "${FOLDER}")
+                echo "- [${FOLDER}](./${FOLDER_ENCODED})"
               fi
             done
-            echo "" >> downloads/README.md
-          done
+            echo ""
+            echo "---"
+            echo ""
+            echo "*This tool is provided as is*"
+          } > "downloads/README.md"
 
-          echo "---" >> downloads/README.md
-          echo "*This tool is provided as is*" >> downloads/README.md
+          echo "downloads/README.md created with list of downloaded files"
 
-          echo "downloads/README.md created with detailed run information"
-
-          # Also update the repository's root README.md
           SECTION_TITLE="Downloaded files in your GitHub repository :"
 
           if [ ! -f "README.md" ]; then
@@ -898,20 +747,19 @@ jobs:
             echo "## $SECTION_TITLE"
             echo ""
             COUNTER=1
-            for run_folder in downloads/*/; do
-              [ -d "$run_folder" ] || continue
-              run_name=$(basename "$run_folder")
-              run_encoded=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$run_name")
-              echo "${COUNTER}. [$run_name]($REPO_URL/$run_encoded)"
-              echo ""
-              COUNTER=$((COUNTER + 1))
+            echo "$FOLDERS" | while read -r FOLDER; do
+              if [ -n "$FOLDER" ]; then
+                FOLDER_ENCODED=$(urlencode "${FOLDER}")
+                echo "${COUNTER}. [$FOLDER]($REPO_URL/$FOLDER_ENCODED)"
+                echo ""
+                COUNTER=$((COUNTER + 1))
+              fi
             done
             echo "---"
           } >> README.md
 
-          echo "Root README.md updated with download links"
+          echo "README.md updated with download links"
 
-      # --- Step 6: Incremental Commit & Push ---
       - name: Incremental Commit & Push
         run: |
           BRANCH="${GITHUB_REF_NAME}"
@@ -940,20 +788,32 @@ jobs:
           }
 
           regenerate_downloads_readme() {
-            # Already generated in previous step, but ensure it's present
-            if [ ! -f "downloads/README.md" ]; then
-              echo "# Downloaded list :" > downloads/README.md
-              echo "" >> downloads/README.md
-              for folder in downloads/*/; do
-                [ -d "$folder" ] || continue
-                FOLDER_NAME=$(basename "$folder")
+            DOWNLOADS_README="downloads/README.md"
+
+            echo "Regenerating downloads README..."
+
+            {
+              echo "# Downloaded list :"
+              echo ""
+            } > "$DOWNLOADS_README"
+
+            for folder in downloads/*/; do
+              [ -d "$folder" ] || continue
+              FOLDER_NAME=$(basename "$folder")
+              if [ -f "$folder/README.md" ]; then
                 FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
-                printf -- "- [%s](./%s)\n" "$FOLDER_NAME" "$FOLDER_ENCODED" >> downloads/README.md
-              done
-              echo "" >> downloads/README.md
-              echo "---" >> downloads/README.md
-              echo "*This tool is provided as is*" >> downloads/README.md
-            fi
+                printf -- "- [%s](./%s)\n" "$FOLDER_NAME" "$FOLDER_ENCODED" >> "$DOWNLOADS_README"
+              fi
+            done
+
+            {
+              echo ""
+              echo "---"
+              echo ""
+              echo "*This tool is provided as is*"
+            } >> "$DOWNLOADS_README"
+
+            echo "Downloads README regenerated"
           }
 
           push_batch() {
